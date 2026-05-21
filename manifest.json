@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Pozzolanic Browser",
+  "version": "0.1.0",
+  "description": "Hide page elements per Scott's rules. Bundled CSS selectors only — no eval, no remote rules, no exfiltration.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://*.amazon.com/*",
+    "https://*.youtube.com/*",
+    "https://*.linkedin.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.amazon.com/*",
+        "https://*.youtube.com/*",
+        "https://*.linkedin.com/*"
+      ],
+      "js": ["rules.js", "content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Pozzolanic Browser"
+  }
+}
