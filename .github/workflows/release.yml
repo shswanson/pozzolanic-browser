@@ -1,0 +1,91 @@
+name: Release to Chrome Web Store
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync manifest version with git tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          echo "Tag version: $TAG"
+          python3 - <<PY
+          import json, pathlib
+          path = pathlib.Path('manifest.json')
+          m = json.loads(path.read_text())
+          m['version'] = '$TAG'
+          path.write_text(json.dumps(m, indent=2) + '\n')
+          print(json.dumps(m, indent=2))
+          PY
+
+      - name: Build extension zip
+        run: |
+          zip -r extension.zip \
+            manifest.json rules.js content.js popup.html popup.js icons/
+          unzip -l extension.zip
+
+      - name: Get Chrome Web Store access token
+        id: token
+        env:
+          CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+        run: |
+          RESPONSE=$(curl -fsS "https://oauth2.googleapis.com/token" \
+            -d "client_id=$CLIENT_ID" \
+            -d "client_secret=$CLIENT_SECRET" \
+            -d "refresh_token=$REFRESH_TOKEN" \
+            -d "grant_type=refresh_token")
+          TOKEN=$(printf '%s' "$RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Upload new version
+        env:
+          TOKEN: ${{ steps.token.outputs.token }}
+          ITEM_ID: ${{ secrets.CWS_EXTENSION_ID }}
+        run: |
+          curl -fsS -X PUT \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "x-goog-api-version: 2" \
+            -T extension.zip \
+            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$ITEM_ID" \
+            -o upload.json
+          cat upload.json
+          STATE=$(python3 -c "import json; print(json.load(open('upload.json')).get('uploadState'))")
+          if [ "$STATE" != "SUCCESS" ]; then
+            echo "::error::Upload failed: $STATE"
+            exit 1
+          fi
+
+      - name: Publish
+        env:
+          TOKEN: ${{ steps.token.outputs.token }}
+          ITEM_ID: ${{ secrets.CWS_EXTENSION_ID }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "x-goog-api-version: 2" \
+            -H "Content-Length: 0" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/$ITEM_ID/publish?publishTarget=default" \
+            -o publish.json
+          cat publish.json
+          STATUS=$(python3 -c "
+          import json
+          d = json.load(open('publish.json'))
+          s = d.get('status')
+          if isinstance(s, list): s = s[0] if s else '?'
+          print(s)
+          ")
+          case "$STATUS" in
+            OK|ITEM_PENDING_REVIEW) echo "Published: $STATUS";;
+            *) echo "::error::Publish failed: $STATUS"; exit 1;;
+          esac
